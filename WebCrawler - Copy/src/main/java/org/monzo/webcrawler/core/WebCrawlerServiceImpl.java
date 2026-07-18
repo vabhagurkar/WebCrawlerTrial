@@ -35,33 +35,65 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
         log.info("Creating WebCrawlerService with rootURI {}", rootURI);
 
         ThreadFactory threadFactory = Thread.ofVirtual().name("worker-", 0).factory();
+        URLFormatter formatter = new URLFormatter();
+        URI normalisedRoot = formatter.normaliseURL(rootURI);
+        if (normalisedRoot == null) {
+            throw new IllegalArgumentException("Invalid root URI: " + rootURI);
+        }
 
         return new WebCrawlerServiceImpl(
                 Executors.newFixedThreadPool(CONCURRENCY_LEVEL, threadFactory),
                 WebEngineObserver.instance(),
-                rootURI);
+                normalisedRoot);
     }
 
     public void enqueue(URI uri) {
-        URI normalisedURI = urlFormatter.normaliseURL(uri);
-        if(normalisedURI == null) return;
-
-        String key = normalisedURI.toString();
-        if(!linkHistory.add(key)) return; //Already seen
-
+        URI normalised = urlFormatter.normaliseURL(uri);
+        if (normalised == null || !urlFormatter.isHtmlResource(normalised)) {
+            return;
+        }
+        String key = normalised.toString();
+        if (!linkHistory.add(key)) {
+            return;
+        }
         webEngineObserver.incrementEnqueuedLinks();
-        executorService.submit(new WebRequestParser(normalisedURI, this));
-        log.debug("Enqueued normalised uri: {}", normalisedURI);
+        executorService.submit(new WebRequestParser(normalised, this));
+        log.debug("Enqueued uri: {}", normalised);
     }
 
     public void enqueueValidURLs(ParseResult parseResult) {
-        String domain = urlFormatter.getDomainName(parseResult.uri());
         parseResult.links().stream()
                 .map(urlFormatter::normaliseURL)
                 .filter(Objects::nonNull)
-                .filter(link -> domain.equalsIgnoreCase(urlFormatter.getDomainName(link)))
+                .filter(link -> urlFormatter.isSameHost(link, rootURI)) // strict host vs seed, not page URI
+                .filter(urlFormatter::isHtmlResource) // skip PDF, images, CSS, JS, …
                 .filter(link -> !linkHistory.contains(link.toString()))
                 .forEach(this::enqueue);
+    }
+
+    /**
+     * Records a redirect landing in the visited set (no new worker task).
+     * Stops A→B→A style re-crawls when B (or a later hop) was already seen.
+     */
+    @Override
+    public synchronized boolean claimRedirectHop(URI hop) {
+        URI normalised = urlFormatter.normaliseURL(hop);
+        if (normalised == null || !urlFormatter.isHtmlResource(normalised)) {
+            log.warn("Rejecting redirect hop (non-HTML or invalid): {}", hop);
+            return false;
+        }
+        if (!urlFormatter.isSameHost(normalised, rootURI)) {
+            log.warn("Rejecting redirect hop (left seed host): {}", normalised);
+            return false;
+        }
+
+        String key = normalised.toString();
+        if (!linkHistory.add(key)) {
+            log.info("Redirect hop already visited: {}", normalised);
+            return false;
+        }
+        log.debug("Recorded redirect hop in visited set: {}", normalised);
+        return true;
     }
 
     @Override
@@ -72,18 +104,23 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
 
     @Override
     public synchronized void processResults(ParseResult parseResult) {
-
         try {
-            if(parseResult.isSuccess()) {
+            if (parseResult.isFailure()) {
+                log.warn("Skipping failed page {}: {}", parseResult.uri(), parseResult.error());
+            } else {
                 enqueueValidURLs(parseResult);
             }
+        } catch (Exception exception) {
+            // Keep the crawl alive even if link expansion misbehaves for one page.
+            log.warn("Error processing {}: {} — continuing crawl",
+                    parseResult.uri(), exception.toString());
         } finally {
             webEngineObserver.incrementProcessedLinks();
             webEngineObserver.printProcessingReport();
-            if(webEngineObserver.isTerminated()) {
+            if (webEngineObserver.isTerminated()) {
                 webEngineObserver.notifyTermination();
-
             }
         }
     }
 }
+
