@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,17 +43,24 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
     }
 
     public void enqueue(URI uri) {
-        linkHistory.add(uri.toString());
+        URI normalisedURI = urlFormatter.normaliseURL(uri);
+        if(normalisedURI == null) return;
+
+        String key = normalisedURI.toString();
+        if(!linkHistory.add(key)) return; //Already seen
+
         webEngineObserver.incrementEnqueuedLinks();
-        executorService.submit(new WebRequestParser(uri, this));
-        log.debug("Enqueued uri: {}", uri);
+        executorService.submit(new WebRequestParser(normalisedURI, this));
+        log.debug("Enqueued normalised uri: {}", normalisedURI);
     }
 
     public void enqueueValidURLs(ParseResult parseResult) {
         String domain = urlFormatter.getDomainName(parseResult.uri());
         parseResult.links().stream()
-                .filter(link -> domain.equalsIgnoreCase(urlFormatter.getDomainName(link)) &&
-                        !linkHistory.contains(link.toString()))
+                .map(urlFormatter::normaliseURL)
+                .filter(Objects::nonNull)
+                .filter(link -> domain.equalsIgnoreCase(urlFormatter.getDomainName(link)))
+                .filter(link -> !linkHistory.contains(link.toString()))
                 .forEach(this::enqueue);
     }
 
