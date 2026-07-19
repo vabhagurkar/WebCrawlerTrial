@@ -13,12 +13,18 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Scanner;
 
+/**
+ * The interactive CLI for WebCrawler.
+ * Prompts for a seed URL, starts and runs the same-host crawls and loop until the user types
+ * "Exit"
+ */
 public class WebCrawlerApplication {
 
-        private static final Logger log = LoggerFactory.getLogger(WebCrawlerApplication.class);
-        private static final String DEFAULT_URL = "https://www.google.com";
+    private static final Logger log = LoggerFactory.getLogger(WebCrawlerApplication.class);
+    //The DEFAULT_URL is used when user inputs blank line.
+    private static final String DEFAULT_URL = "https://www.google.com";
 
-
+    //Factory style constructor
     public static WebCrawlerApplication instance() {
         return new WebCrawlerApplication();
     }
@@ -43,13 +49,16 @@ public class WebCrawlerApplication {
                 System.out.println("URI formed is: " + uri.toString());
                 Instant startTime = Instant.now();
 
+                //Creates the crawler for the seed and starts the first enqueue
                 WebCrawlerService webCrawlerService = WebCrawlerServiceImpl.create(uri);
                 WebEngineObserver observer = webCrawlerService.start();
 
+                //Blocks until enqueued==processed
                 observer.awaitTermination();
 
                 Instant endTime = Instant.now();
-                System.out.println("Completed the task in %d seconds: " + Duration.between(startTime, endTime).getSeconds());
+                System.out.println();
+                System.out.printf("Completed the task in %d seconds.", Duration.between(startTime, endTime).getSeconds());
 
             } catch(MalformedURLException mfe) {
                 System.out.println("Invalid URL, please try again.");
@@ -62,7 +71,7 @@ public class WebCrawlerApplication {
     }
 
     private URI formatInput(String input) throws MalformedURLException {
-        if(null == input || input.isBlank()) {
+        if(input == null || input.isBlank()) {
             System.out.println("Falling back to default url: " + DEFAULT_URL);
             return URI.create(DEFAULT_URL);
         }

@@ -8,9 +8,15 @@ import java.net.URI;
 import java.util.Locale;
 import java.util.Set;
 
+/**
+ * URL helpers for seed validation, normalisation, same-host checks and HTML filtering.
+ * Used by the CLI, the crawler and WebClient.
+ */
 public class URLFormatter {
 
+    /** Accepts only http and https schemes for seed input. */
     private static final UrlValidator URL_VALIDATOR = new UrlValidator(new String[]{"http", "https"});
+    /** Path extensions treated as non-crawler assets (not enqueued even on the seed host. */
     private static final Set<String> NON_HTML_EXTENSIONS = Set.of(
             // documents
             "pdf",
@@ -22,15 +28,16 @@ public class URLFormatter {
             "woff", "woff2", "ttf", "eot", "otf"
     );
 
-
+    /** Validates user seed input: rejects blank values, adds https if needed and checks the URL with Commons
+     * validator.*/
     public URI parseAndValidateURL(String inputURL) throws MalformedURLException {
         try {
-            if(null == inputURL || inputURL.isBlank()) throw new InvalidInputURLException("URL cannot be empty or " +
+            if(inputURL == null || inputURL.isBlank()) throw new InvalidInputURLException("URL cannot be empty or " +
                     "blank.");
 
             inputURL = checkProtocolAndAdd(inputURL);
 
-            if(URL_VALIDATOR.isValid(inputURL)) {
+            if(!URL_VALIDATOR.isValid(inputURL)) {
                 throw new MalformedURLException("Invalid URL format.");
             }
 
@@ -41,11 +48,6 @@ public class URLFormatter {
         }
     }
 
-    public String getDomainName(URI uri) {
-        String host = uri.getHost();
-        return (host != null && host.startsWith("www") ? host.substring(4) : host);
-    }
-
     public String checkProtocolAndAdd(String inputURL) {
         if(!inputURL.toLowerCase().startsWith("http")) {
             inputURL = "https://" + inputURL;
@@ -53,8 +55,13 @@ public class URLFormatter {
         return inputURL;
     }
 
+    /**
+     * Canonical form used as the visited-set key: lower case scheme/host, strip www, drop default ports, ensure a
+     * path, trim a trailing slash.
+     * Query strings are kept; fragments are not included.
+     */
     public URI normaliseURL(URI uri) {
-        if(null == uri || uri.getHost() == null) {
+        if(uri == null || uri.getHost() == null) {
             return null;
         }
 
@@ -72,7 +79,7 @@ public class URLFormatter {
         }
 
         String path = uri.getPath();
-        if((null == path) || path.isEmpty()) {
+        if((path == null) || path.isEmpty()) {
             path = "/";
         } else if(path.length() > 1 && path.endsWith("/")) {
             path = path.substring(0, path.length() - 1);
@@ -86,7 +93,7 @@ public class URLFormatter {
     }
 
     public String canonicalHost(URI uri) {
-        if(null == uri || uri.getHost() == null) {
+        if(uri == null || uri.getHost() == null) {
             return null;
         }
         //Explicit www policy - strip only "www." not startsWith("www")
@@ -127,5 +134,4 @@ public class URLFormatter {
         String extension = fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
         return NON_HTML_EXTENSIONS.contains(extension);
     }
-
 }

@@ -16,24 +16,75 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.function.Predicate;
 
 public class WebClient {
 
     private static final Logger log = LoggerFactory.getLogger(WebClient.class);
-    private static final int MAX_REDIRECTS = 3;
+    private static final int MAX_REDIRECTS = 1;
 
     private final HttpClient httpClient;
+    private final URLFormatter urlFormatter;
 
     WebClient() {
         this(HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(30))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build());
+                        .connectTimeout(Duration.ofSeconds(30))
+                        .followRedirects(HttpClient.Redirect.NEVER)
+                        .build(),
+                new URLFormatter());
     }
 
     public WebClient(HttpClient httpClient) {
+        this(httpClient, new URLFormatter());
+    }
+
+    public WebClient(HttpClient httpClient, URLFormatter urlFormatter) {
         this.httpClient = httpClient;
+        this.urlFormatter = urlFormatter;
+    }
+
+    public FetchResult fetch(URI uri) {
+        return fetch(uri, hop -> true);
+    }
+
+    /**
+     * GET with manual redirect following. Each hop is normalised.
+     * {@code acceptRedirectHop} is invoked for every hop after the first; return
+     * {@code false} to stop (e.g. off-host, already visited, or non-HTML).
+     */
+    public FetchResult fetch(URI uri, Predicate<URI> acceptRedirectHop) {
+        URI current = requireNormalised(uri);
+        List<URI> chain = new ArrayList<>();
+        Set<String> seenInChain = new HashSet<>();
+
+        for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            if (!seenInChain.add(current.toString())) {
+                throw new WebClientException("Redirect loop detected at " + current);
+            }
+            chain.add(current);
+
+            log.debug("GET URL (hop {}): {}", hop, current);
+            HttpResponse<String> response = send(current);
+            int status = response.statusCode();
+
+            if (isRedirect(status)) {
+                URI next = requireNormalised(resolveRedirect(current, response));
+                if (!acceptRedirectHop.test(next)) {
+                    throw new WebClientException(
+                            "Redirect target already visited or not crawlable: " + next);
+                }
+                current = next;
+                continue;
+            }
+
+            checkResponseStatus(response);
+            checkHtmlContentType(response);
+            return new FetchResult(chain.getFirst(), current, List.copyOf(chain), response.body());
+        }
+
+        throw new WebClientException("Too many redirects (>" + MAX_REDIRECTS + ") from " + uri);
     }
 
     private HttpResponse<String> send(URI uri) {
@@ -51,50 +102,12 @@ public class WebClient {
         }
     }
 
-    private void checkResponseStatus(HttpResponse<String> httpResponse) {
-        int responseStatusCode = httpResponse.statusCode();
-
-        if(responseStatusCode >= 400 && responseStatusCode <= 499) throw new ClientErrorException(httpResponse);
-        if(responseStatusCode >= 500 && responseStatusCode <= 599) throw new ServerErrorException(httpResponse);
-    }
-
-    /** Skip responses that are clearly not HTML (e.g. PDF/image served without a file extension). */
-    private void checkHtmlContentType(HttpResponse<String> httpResponse) {
-        httpResponse.headers().firstValue("content-type").ifPresent(contentType -> {
-            String normalised = contentType.toLowerCase();
-            if (normalised.contains("text/html") || normalised.contains("application/xhtml")) {
-                return;
-            }
-            throw new WebClientException("Skipping non-HTML content-type: " + contentType);
-        });
-    }
-
-    /**
-     * GET with manual redirect following. Each hop is normalised; cycles in the
-     * redirect chain throw {@link WebClientException}.
-     */
-    public FetchResult fetch(URI uri) {
-        URI current = new URLFormatter().normaliseURL(uri);
-        List<URI> chain = new ArrayList<>();
-        Set<String> seenInChain = new HashSet<>();
-        for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
-            if (!seenInChain.add(current.toString())) {
-                throw new WebClientException("Redirect loop detected at " + current);
-            }
-            chain.add(current);
-            log.debug("GET URL (hop {}): {}", hop, current);
-            HttpResponse<String> response = send(current);
-            int status = response.statusCode();
-            if (isRedirect(status)) {
-                URI next = resolveRedirect(current, response);
-                continue;
-            }
-
-            checkResponseStatus(response);
-            checkHtmlContentType(response);
-            return new FetchResult(chain.getFirst(), current, List.copyOf(chain), response.body());
+    private URI requireNormalised(URI uri) {
+        URI normalised = urlFormatter.normaliseURL(uri);
+        if (normalised == null) {
+            throw new WebClientException("Cannot normalise URI: " + uri);
         }
-        throw new WebClientException("Too many redirects (>" + MAX_REDIRECTS + ") from " + uri);
+        return normalised;
     }
 
     private static boolean isRedirect(int status) {
@@ -112,7 +125,24 @@ public class WebClient {
         }
     }
 
-    public FetchResult fetch(URI targetURL, Object claimRedirectHop) {
-        return null;
+    private void checkResponseStatus(HttpResponse<String> httpResponse) {
+        int responseStatusCode = httpResponse.statusCode();
+
+        if (responseStatusCode >= 400 && responseStatusCode <= 499) {
+            throw new ClientErrorException(httpResponse);
+        }
+        if (responseStatusCode >= 500 && responseStatusCode <= 599) {
+            throw new ServerErrorException(httpResponse);
+        }
+    }
+
+    private void checkHtmlContentType(HttpResponse<String> httpResponse) {
+        httpResponse.headers().firstValue("content-type").ifPresent(contentType -> {
+            String normalised = contentType.toLowerCase(Locale.ROOT);
+            if (normalised.contains("text/html") || normalised.contains("application/xhtml")) {
+                return;
+            }
+            throw new WebClientException("Skipping non-HTML content-type: " + contentType);
+        });
     }
 }

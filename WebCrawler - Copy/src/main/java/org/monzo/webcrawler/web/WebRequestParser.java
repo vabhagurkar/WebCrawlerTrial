@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.List​;
 
 public class WebRequestParser implements Runnable {
 
@@ -35,7 +34,7 @@ public class WebRequestParser implements Runnable {
         log.info("Web parser is running for {}", targetURL);
         ParseResult result;
         try {
-            FetchResult fetch = webClient.fetch(targetURL);
+            FetchResult fetch = webClient.fetch(targetURL, webCrawlerService::claimRedirectHop);
             Document doc = Jsoup.parse(fetch.body(), fetch.finalUri().toString());
             List<URI> links = extractLinks(doc);
             result = new ParseResult(fetch.finalUri(), links);
