@@ -68,7 +68,7 @@ public class URLFormatter {
         String scheme = uri.getScheme().toLowerCase();
         String host = uri.getHost().toLowerCase();
 
-        if(host.startsWith("www")) {
+        if(host.startsWith("www.")) {
             host = host.substring(4);
         }
 
